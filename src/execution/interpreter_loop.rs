@@ -881,7 +881,7 @@ pub(super) fn run<H: HookSet>(
                 let v2: i32 = stack.pop_value(ValType::NumType(NumType::I32)).into();
                 let v1: i32 = stack.pop_value(ValType::NumType(NumType::I32)).into();
 
-                let res = if v1 == v2 { 1 } else { 0 };
+                let res = if v1 == v2 { 0 } else { 1 };
 
                 trace!("Instruction: i32.eq [{v1} {v2}] -> [{res}]");
                 stack.push_value(res.into());

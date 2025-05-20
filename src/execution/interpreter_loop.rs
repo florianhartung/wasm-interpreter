@@ -575,7 +575,7 @@ pub(super) fn run<H: HookSet>(
                 let idx = get_store_index(&memarg, relative_address)?;
                 let data: u16 = mem.mem.load(idx)?;
 
-                stack.push_value(Value::I32(data as u32 + 1));
+                stack.push_value(Value::I32(data as u32));
                 trace!("Instruction: i32.load16_u [{relative_address}] -> [{data}]");
             }
             I64_LOAD8_S => {

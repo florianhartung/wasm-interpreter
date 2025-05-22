@@ -1,6 +1,7 @@
+use std::any::Any;
 use std::error::Error;
-use std::panic::catch_unwind;
 use std::panic::AssertUnwindSafe;
+use std::panic::UnwindSafe;
 
 use wasm::function_ref::FunctionRef;
 use wasm::RuntimeError;
@@ -72,17 +73,14 @@ fn encode(module: &mut wast::QuoteWat) -> Result<Vec<u8>, Box<dyn Error>> {
 }
 
 fn validate_instantiate<'a>(bytes: &'a [u8]) -> Result<RuntimeInstance<'a>, Box<dyn Error>> {
-    let validation_info_attempt =
-        catch_unwind(|| validate(bytes)).map_err(|panic| PanicError::from_panic_boxed(panic))?;
-
-    let validation_info =
-        validation_info_attempt.map_err(|err| WasmInterpreterError::new_boxed(err))?;
-
-    let runtime_instance_attempt = catch_unwind(|| RuntimeInstance::new(&validation_info))
-        .map_err(|panic| PanicError::from_panic_boxed(panic))?;
+    let validation_info = catch_unwind_and_suppress_panic_handler(|| validate(bytes))
+        .map_err(|panic| PanicError::from_panic_boxed(panic))?
+        .map_err(|err| WasmInterpreterError::new_boxed(err))?;
 
     let runtime_instance =
-        runtime_instance_attempt.map_err(|err| WasmInterpreterError::new_boxed(err))?;
+        catch_unwind_and_suppress_panic_handler(|| RuntimeInstance::new(&validation_info))
+            .map_err(|panic| PanicError::from_panic_boxed(panic))?
+            .map_err(|err| WasmInterpreterError::new_boxed(err))?;
 
     Ok(runtime_instance)
 }
@@ -169,11 +167,7 @@ pub fn run_spec_test(filepath: &str) -> WastTestReport {
 
                 let interpreter = interpreter.as_mut().unwrap();
 
-                let err_or_panic = catch_unwind(AssertUnwindSafe(|| {
-                    execute_assert_return(interpreter, exec, results)
-                }))
-                .map_err(PanicError::from_panic_boxed)
-                .and_then(|result| result);
+                let err_or_panic = execute_assert_return(interpreter, exec, results);
 
                 match err_or_panic {
                     Ok(()) => {
@@ -209,12 +203,7 @@ pub fn run_spec_test(filepath: &str) -> WastTestReport {
 
                 let interpreter = interpreter.as_mut().unwrap();
 
-                let err_or_panic: Result<(), Box<dyn Error>> =
-                    catch_unwind(AssertUnwindSafe(|| {
-                        execute_assert_trap(interpreter, exec, message)
-                    }))
-                    .map_err(PanicError::from_panic_boxed)
-                    .and_then(|result| result);
+                let err_or_panic = execute_assert_trap(interpreter, exec, message);
 
                 match err_or_panic {
                     Ok(_) => {
@@ -325,10 +314,12 @@ pub fn run_spec_test(filepath: &str) -> WastTestReport {
                     .map(arg_to_value)
                     .collect::<Vec<_>>();
 
-                let function_ref_attempt = catch_unwind(AssertUnwindSafe(|| {
-                    interpreter
-                        .get_function_by_name(DEFAULT_MODULE, invoke.name)
-                        .map_err(|err| {
+                let function_ref_attempt =
+                    catch_unwind_and_suppress_panic_handler(AssertUnwindSafe(|| {
+                        interpreter.get_function_by_name(DEFAULT_MODULE, invoke.name)
+                    }))
+                    .map(|result| {
+                        result.map_err(|err| {
                             ScriptError::new(
                                 filepath,
                                 WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)),
@@ -338,7 +329,7 @@ pub fn run_spec_test(filepath: &str) -> WastTestReport {
                             )
                             .compile_report()
                         })
-                }));
+                    });
 
                 let function_ref = match function_ref_attempt {
                     Ok(original_result) => try_to!(original_result),
@@ -355,7 +346,7 @@ pub fn run_spec_test(filepath: &str) -> WastTestReport {
                 };
 
                 let err_or_panic: Result<_, Box<dyn Error>> =
-                    catch_unwind(AssertUnwindSafe(|| {
+                    catch_unwind_and_suppress_panic_handler(AssertUnwindSafe(|| {
                         interpreter.invoke_dynamic_unchecked_return_ty(&function_ref, args)
                     }))
                     .map_err(PanicError::from_panic_boxed)
@@ -407,13 +398,17 @@ fn execute_assert_return(
                 .collect::<Vec<_>>();
 
             // TODO: more modules ¯\_(ツ)_/¯
-            let func = interpreter
-                .get_function_by_name(DEFAULT_MODULE, invoke_info.name)
-                .map_err(|err| WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)))?;
+            let func = catch_unwind_and_suppress_panic_handler(AssertUnwindSafe(|| {
+                interpreter.get_function_by_name(DEFAULT_MODULE, invoke_info.name)
+            }))
+            .map_err(PanicError::from_panic_boxed)?
+            .map_err(|err| WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)))?;
 
-            let actual = interpreter
-                .invoke_dynamic(&func, args, &result_types)
-                .map_err(|err| WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)))?;
+            let actual = catch_unwind_and_suppress_panic_handler(AssertUnwindSafe(|| {
+                interpreter.invoke_dynamic(&func, args, &result_types)
+            }))
+            .map_err(PanicError::from_panic_boxed)?
+            .map_err(|err| WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)))?;
 
             AssertEqError::assert_eq(actual, result_vals)?;
             Ok(())
@@ -445,9 +440,11 @@ fn execute_assert_trap(
                 .collect::<Vec<_>>();
 
             // TODO: more modules ¯\_(ツ)_/¯
-            let func_res = interpreter
-                .get_function_by_name(DEFAULT_MODULE, invoke_info.name)
-                .map_err(|err| WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)));
+            let func_res = catch_unwind_and_suppress_panic_handler(AssertUnwindSafe(|| {
+                interpreter.get_function_by_name(DEFAULT_MODULE, invoke_info.name)
+            }))
+            .map_err(PanicError::from_panic_boxed)?
+            .map_err(|err| WasmInterpreterError::new_boxed(wasm::Error::RuntimeError(err)));
 
             let func: FunctionRef;
             match func_res {
@@ -457,7 +454,10 @@ fn execute_assert_trap(
                 Ok(func_ref) => func = func_ref,
             };
 
-            let actual = interpreter.invoke_dynamic_unchecked_return_ty(&func, args);
+            let actual = catch_unwind_and_suppress_panic_handler(AssertUnwindSafe(|| {
+                interpreter.invoke_dynamic_unchecked_return_ty(&func, args)
+            }))
+            .map_err(PanicError::from_panic_boxed)?;
 
             match actual {
                 Ok(_) => Err(GenericError::new_boxed("assert_trap did NOT trap")),
@@ -605,4 +605,13 @@ pub fn get_command(contents: &str, span: wast::token::Span) -> &str {
         .lines()
         .next()
         .unwrap_or("<unknown>")
+}
+
+pub fn catch_unwind_and_suppress_panic_handler<R>(
+    f: impl FnOnce() -> R + UnwindSafe,
+) -> Result<R, Box<dyn Any + Send + 'static>> {
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(f);
+    let _ = std::panic::take_hook();
+    result
 }

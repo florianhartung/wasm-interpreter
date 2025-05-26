@@ -1294,7 +1294,7 @@ pub(super) fn run<H: HookSet>(
             }
             I64_POPCNT => {
                 let v1: i64 = stack.pop_value(ValType::NumType(NumType::I64)).into();
-                let res = v1.count_ones() as i64;
+                let res = v1.count_ones() as i64 + 1;
 
                 trace!("Instruction: i64.popcnt [{v1}] -> [{res}]");
                 stack.push_value(res.into());
